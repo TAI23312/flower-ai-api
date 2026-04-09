@@ -1,8 +1,10 @@
 import onnxruntime as ort
 import numpy as np
 from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import HTMLResponse # 确保引入了这个
 from PIL import Image
 import io
+import base64 # 新增：用于将图片编码为网页可以直接显示的格式
 
 app = FastAPI()
 
@@ -66,25 +68,49 @@ def preprocess_image_numpy(image_bytes):
 async def predict(file: UploadFile = File(...)):
     contents = await file.read()
     
-    # 执行轻量级预处理
+    # 1. 极速推理
     input_data = preprocess_image_numpy(contents)
-    
-    # 🚀 执行极速推理！
-    # ort_session.run 需要的参数：(输出节点名称列表(填None即可), 输入数据字典)
     outputs = ort_session.run(None, {input_name: input_data})
-    
-    # 解析输出 (outputs[0] 是一个 shape 为 [1, 102] 的数组)
     logits = outputs[0]
-    class_id = int(np.argmax(logits, axis=1)[0]) # 找到概率最大的索引
-    
+    class_id = int(np.argmax(logits, axis=1)[0])
     flower_name = idx_to_class.get(class_id, "未知花卉")
-        
-    return {
-        "class_id": class_id, 
-        "flower_name": flower_name,
-        "engine": "ONNX Runtime", # 加个标记证明我们在用高级引擎
-        "message": "Prediction successful"
-    }
+    
+    # 2. 将用户上传的图片转换为 Base64 格式，直接内嵌到网页中！
+    # 这样服务器不需要存图片，又快又安全
+    base64_image = base64.b64encode(contents).decode('utf-8')
+    image_data_url = f"data:{file.content_type};base64,{base64_image}"
+    
+    # 3. 华丽的 HTML 结果页面
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>识别结果 - {flower_name}</title>
+        <style>
+            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; text-align: center; margin: 0; padding: 40px 20px; }}
+            .result-card {{ background: white; max-width: 400px; margin: 0 auto; padding: 30px; border-radius: 15px; box-shadow: 0 10px 20px rgba(0,0,0,0.1); }}
+            .uploaded-img {{ max-width: 100%; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 4px 8px rgba(0,0,0,0.05); }}
+            .flower-name {{ color: #2E7D32; font-size: 28px; margin: 0 0 10px 0; }}
+            .engine-tag {{ display: inline-block; background-color: #E8F5E9; color: #388E3C; padding: 5px 12px; border-radius: 20px; font-size: 14px; font-weight: bold; margin-bottom: 25px; }}
+            .back-btn {{ display: inline-block; background-color: #4CAF50; color: white; text-decoration: none; padding: 12px 25px; border-radius: 8px; font-size: 16px; font-weight: bold; transition: background 0.3s; }}
+            .back-btn:hover {{ background-color: #45a049; }}
+        </style>
+    </head>
+    <body>
+        <div class="result-card">
+            <img src="{image_data_url}" alt="你上传的花卉" class="uploaded-img">
+            <h1 class="flower-name">{flower_name}</h1>
+            <div class="engine-tag">⚡ Powered by ONNX Runtime</div>
+            <br>
+            <a href="/" class="back-btn">再测一张</a>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return HTMLResponse(content=html_content)
 
 from fastapi.responses import HTMLResponse
 
